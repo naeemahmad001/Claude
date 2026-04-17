@@ -69,14 +69,24 @@ def model(x, x0, cal_hz_per_x, finesse, beta, scale, offset):
 
 
 def _load_table(path, sheet, x_col, y_col):
-    """Load two columns from .xlsx, .xls, .csv, .tsv or .txt transparently."""
+    """Load two columns from .xlsx, .xls, .csv, .tsv or .txt transparently.
+
+    Coerces the chosen columns to float and silently drops any rows
+    that don't parse (unit-label rows, stray text, blank lines, etc).
+    """
     ext = os.path.splitext(path)[1].lower()
     tried = []
 
     def _pick(df):
         xs = df.iloc[:, x_col] if isinstance(x_col, int) else df[x_col]
         ys = df.iloc[:, y_col] if isinstance(y_col, int) else df[y_col]
-        return xs.to_numpy(), ys.to_numpy()
+        xs = pd.to_numeric(xs, errors='coerce')
+        ys = pd.to_numeric(ys, errors='coerce')
+        mask = xs.notna() & ys.notna()
+        dropped = (~mask).sum()
+        if dropped:
+            print(f'  (dropped {dropped} non-numeric row(s), e.g. unit labels)')
+        return xs[mask].to_numpy(), ys[mask].to_numpy()
 
     # text formats
     if ext in ('.csv', '.tsv', '.txt'):
