@@ -68,13 +68,43 @@ def model(x, x0, cal_hz_per_x, finesse, beta, scale, offset):
     return scale * pdh_error_hz(delta, finesse, FSR_HZ, OMEGA_M_HZ, beta) + offset
 
 
+def _load_table(path, sheet, x_col, y_col):
+    """Load two columns from .xlsx, .xls, .csv, .tsv or .txt transparently."""
+    ext = os.path.splitext(path)[1].lower()
+    tried = []
+
+    def _pick(df):
+        xs = df.iloc[:, x_col] if isinstance(x_col, int) else df[x_col]
+        ys = df.iloc[:, y_col] if isinstance(y_col, int) else df[y_col]
+        return xs.to_numpy(), ys.to_numpy()
+
+    # text formats
+    if ext in ('.csv', '.tsv', '.txt'):
+        sep = '\t' if ext == '.tsv' else None     # None -> sniff
+        return _pick(pd.read_csv(path, sep=sep, engine='python'))
+
+    # excel formats, trying multiple engines in case the extension lies
+    for engine in ('openpyxl', 'xlrd', 'odf'):
+        try:
+            return _pick(pd.read_excel(path, sheet_name=sheet, engine=engine))
+        except Exception as exc:
+            tried.append(f'{engine}: {exc.__class__.__name__}')
+
+    # last resort: maybe it is really a text file with a bogus extension
+    for sep in (',', '\t', r'\s+'):
+        try:
+            return _pick(pd.read_csv(path, sep=sep, engine='python'))
+        except Exception as exc:
+            tried.append(f'csv sep={sep!r}: {exc.__class__.__name__}')
+
+    raise RuntimeError(f'Could not read {path}. Tried: ' + ' | '.join(tried))
+
+
 def run():
     # ---------------------------------------------------------------------
     # Load data
     # ---------------------------------------------------------------------
-    df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET)
-    x_raw = df.iloc[:, X_COL].to_numpy() if isinstance(X_COL, int) else df[X_COL].to_numpy()
-    y_raw = df.iloc[:, Y_COL].to_numpy() if isinstance(Y_COL, int) else df[Y_COL].to_numpy()
+    x_raw, y_raw = _load_table(EXCEL_PATH, SHEET, X_COL, Y_COL)
 
     order = np.argsort(x_raw)
     x = x_raw[order].astype(float)
