@@ -156,8 +156,45 @@ def run():
     bounds_lo = [x.min(), -np.inf, 10.0,  0.1, 0.0,      y.min()]
     bounds_hi = [x.max(),  np.inf, 1.0e6, 5.0, 10 * amp, y.max()]
 
-    popt, pcov = curve_fit(model, x, y, p0=p0,
-                           bounds=(bounds_lo, bounds_hi), maxfev=20000)
+    print('\n--- initial guess ---')
+    print(f'  x0  = {x0_guess:.4g}')
+    print(f'  cal = {cal_guess:.4g} Hz / x-unit  '
+          f'(so ~{cal_guess * (x.max() - x.min()) / 1e6:.2f} MHz spanned)')
+    print(f'  finesse = {FINESSE_GUESS:.0f}')
+    print(f'  detected {len(all_pk)} peaks (need >=4 for auto-calibration)')
+
+    # Show the initial guess over the data: if this preview is nowhere near
+    # the data you need to edit FINESSE_GUESS, BETA_GUESS, or column indices.
+    fig0, ax0 = plt.subplots(figsize=(9, 3.5))
+    ax0.plot(x, y, '.', ms=3, color='0.5', label='data')
+    xd = np.linspace(x.min(), x.max(), 2000)
+    ax0.plot(xd, model(xd, *p0), 'C1', lw=1.2, label='initial guess')
+    ax0.set_title('Initial guess preview (close window to continue to the fit)')
+    ax0.legend(fontsize=8)
+    plt.tight_layout()
+    preview_png = os.path.join(os.path.dirname(os.path.abspath(EXCEL_PATH)),
+                               'pdh_fit_guess.png')
+    fig0.savefig(preview_png, dpi=120)
+    print(f'  guess preview saved to {preview_png}')
+
+    # Multi-start fit: try several finesse guesses and pick the lowest-RSS fit.
+    best = None
+    for F_try in (FINESSE_GUESS, 100.0, 500.0, 3000.0, 10000.0, 30000.0):
+        try:
+            p0_try = list(p0); p0_try[2] = F_try
+            popt_try, pcov_try = curve_fit(model, x, y, p0=p0_try,
+                                           bounds=(bounds_lo, bounds_hi),
+                                           maxfev=20000)
+            rss = np.sum((y - model(x, *popt_try))**2)
+            if best is None or rss < best[0]:
+                best = (rss, popt_try, pcov_try, F_try)
+        except Exception as exc:
+            print(f'  finesse start {F_try:.0f}: {exc.__class__.__name__}')
+    if best is None:
+        raise RuntimeError('All fit attempts failed. Check the guess preview '
+                           'plot and adjust FINESSE_GUESS/X_COL/Y_COL.')
+    rss_best, popt, pcov, F_used = best
+    print(f'  best start: finesse guess = {F_used:.0f}  (RSS = {rss_best:.3g})')
     perr = np.sqrt(np.diag(pcov))
 
     x0_f, cal_f, finesse_f, beta_f, scale_f, offset_f = popt
