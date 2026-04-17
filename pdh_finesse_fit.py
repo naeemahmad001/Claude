@@ -80,13 +80,14 @@ def _load_table(path, sheet, x_col, y_col):
     def _pick(df):
         xs = df.iloc[:, x_col] if isinstance(x_col, int) else df[x_col]
         ys = df.iloc[:, y_col] if isinstance(y_col, int) else df[y_col]
-        xs = pd.to_numeric(xs, errors='coerce')
-        ys = pd.to_numeric(ys, errors='coerce')
-        mask = xs.notna() & ys.notna()
-        dropped = (~mask).sum()
+        xs = pd.to_numeric(xs, errors='coerce').to_numpy(dtype=float)
+        ys = pd.to_numeric(ys, errors='coerce').to_numpy(dtype=float)
+        mask = np.isfinite(xs) & np.isfinite(ys)
+        dropped = int((~mask).sum())
         if dropped:
-            print(f'  (dropped {dropped} non-numeric row(s), e.g. unit labels)')
-        return xs[mask].to_numpy(), ys[mask].to_numpy()
+            print(f'  (dropped {dropped} non-finite row(s): text labels, '
+                  f'NaN, Inf, or unequal column lengths)')
+        return xs[mask], ys[mask]
 
     # text formats
     if ext in ('.csv', '.tsv', '.txt'):
@@ -119,6 +120,14 @@ def run():
     order = np.argsort(x_raw)
     x = x_raw[order].astype(float)
     y = y_raw[order].astype(float)
+
+    finite = np.isfinite(x) & np.isfinite(y)
+    if (~finite).any():
+        print(f'  (removing {int((~finite).sum())} non-finite sample(s))')
+        x = x[finite]; y = y[finite]
+    if x.size < 20:
+        raise RuntimeError(f'Only {x.size} usable samples - check X_COL/Y_COL '
+                           f'and the file contents.')
 
     # ---------------------------------------------------------------------
     # Initial guesses from the data
