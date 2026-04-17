@@ -13,10 +13,15 @@ Units: cavity linewidth kappa = 1, FSR = finesse * kappa, time in 1/kappa.
 Numbers are chosen for pedagogical clarity, not any specific apparatus.
 """
 
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, sosfiltfilt
 from scipy.special import jv
+
+OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'pdh_locking_demo.png')
 
 
 # ---------------------------------------------------------------------------
@@ -180,5 +185,6 @@ ax6.legend(loc='upper right', fontsize=8, framealpha=0.9)
 
 fig.suptitle('Pound-Drever-Hall laser frequency locking: signal chain',
              fontsize=14, y=0.995)
-fig.savefig('/home/user/Claude/pdh_locking_demo.png', dpi=140, bbox_inches='tight')
-print('Saved pdh_locking_demo.png')
+fig.savefig(OUT_PATH, dpi=140, bbox_inches='tight')
+print(f'Saved {OUT_PATH}')
+plt.show()
