@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Generated sample data (regenerate with sample_data/generate_sample.py)
+sample_data/*.txt
+
+# Exports
+*.csv
