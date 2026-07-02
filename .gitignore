@@ -4,7 +4,13 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.venv-build/
 venv/
+
+# PyInstaller build output
+build/
+dist/
+*.manifest
 
 # Generated sample data (regenerate with sample_data/generate_sample.py)
 sample_data/*.txt

@@ -58,6 +58,31 @@ Dependencies: `numpy`, `PyQt5`, `pyqtgraph` (plus `pytest` for the test suite).
 > **Linux:** if Qt complains about missing libraries, install them with
 > `sudo apt install libgl1 libxkbcommon0` (Debian/Ubuntu).
 
+## Build a standalone Windows .exe (no Python needed to run)
+
+To hand the tool to someone who doesn't have Python, build a single-file
+executable **on a Windows machine** (Python 3.9+ required to build; not to
+run the result):
+
+```bat
+build_windows.bat
+```
+
+This installs [PyInstaller](https://pyinstaller.org/) in a throwaway
+environment and produces **`dist\FXE-Analyzer.exe`** — one file you can copy
+anywhere and double-click. The build is driven by
+`packaging/FXE-Analyzer.spec`.
+
+Notes:
+- Build on the same Windows architecture you'll run on (a 64-bit build runs
+  on 64-bit Windows). PyInstaller does not cross-compile, so a Windows `.exe`
+  must be built on Windows.
+- The `.exe` is windowed (no console). If it won't start on a given PC and
+  you want to see the error, edit `packaging/FXE-Analyzer.spec` and set
+  `console=True`, then rebuild.
+- Windows SmartScreen may warn about an unsigned executable the first time;
+  choose *More info → Run anyway*, or code-sign it for wider distribution.
+
 ## Try it immediately (synthetic data)
 
 Generate two consecutive FXE-style files (8 channels, 1 ms gate) and load them:
