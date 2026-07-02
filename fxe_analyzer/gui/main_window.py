@@ -44,6 +44,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dataset: Optional[Dataset] = None
         self.channel_checks: Dict[str, QtWidgets.QCheckBox] = {}
         self.last_results: Dict[str, list] = {}
+        self.last_summary: Dict[str, tuple] = {}  # name -> (slope, noise, drift)
         self.result_mode = "fractional"  # or "hz"
 
         self._build_ui()
@@ -120,6 +121,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.region_label = QtWidgets.QLabel("selection: —")
         self.region_label.setStyleSheet("color: gray;")
         dform.addRow(self.region_label)
+        self.btn_save_plots = QtWidgets.QPushButton("Save channel plots as image…")
+        self.btn_save_plots.clicked.connect(self._export_plots_image)
+        dform.addRow(self.btn_save_plots)
         v.addWidget(disp_box)
 
         # --- stability ---------------------------------------------------
@@ -150,6 +154,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ref_spin.setSuffix(" Hz")
         self.ref_spin.setEnabled(False)
         ref_form.addRow("Reference / carrier ν₀:", self.ref_spin)
+        self.detrend_combo = QtWidgets.QComboBox()
+        self.detrend_combo.addItem("None", 0)
+        self.detrend_combo.addItem("Linear drift", 1)
+        self.detrend_combo.addItem("Quadratic", 2)
+        ref_form.addRow("Remove drift before σ(τ):", self.detrend_combo)
         sform.addLayout(ref_form)
 
         self.result_mode_combo = QtWidgets.QComboBox()
@@ -166,9 +175,14 @@ class MainWindow(QtWidgets.QMainWindow):
         crow.addWidget(self.btn_calc_full)
         crow.addWidget(self.btn_calc_sel)
         sform.addLayout(crow)
-        self.btn_export = QtWidgets.QPushButton("Export results to CSV…")
+        erow = QtWidgets.QHBoxLayout()
+        self.btn_export = QtWidgets.QPushButton("Export results CSV…")
         self.btn_export.clicked.connect(self._export_csv)
-        sform.addWidget(self.btn_export)
+        self.btn_save_adev = QtWidgets.QPushButton("Save Allan plot…")
+        self.btn_save_adev.clicked.connect(self._export_adev_image)
+        erow.addWidget(self.btn_export)
+        erow.addWidget(self.btn_save_adev)
+        sform.addLayout(erow)
         v.addWidget(stab_box)
 
         v.addStretch(1)
@@ -312,24 +326,36 @@ class MainWindow(QtWidgets.QMainWindow):
         active = self._selected_channels()
         tau0 = self.dataset.tau0
         f_ref_override = None if self.use_mean_ref.isChecked() else float(self.ref_spin.value())
+        detrend = int(self.detrend_combo.currentData())
 
         results: Dict[str, list] = {}
+        summary: Dict[str, tuple] = {}
         for name in active:
             freq = self.dataset.channels[name]
             if use_selection:
                 mask = self.plot_grid.selection_mask(name)
                 if mask is not None:
                     freq = freq[mask]
-            results[name] = stability.compute_stability(
-                freq, tau0, taus=taus, f_ref=f_ref_override
+            pts = stability.compute_stability(
+                freq, tau0, taus=taus, f_ref=f_ref_override, detrend=detrend
             )
+            results[name] = pts
+            # Per-channel summary: measured drift + ADEV slope / noise type.
+            drift = stability.estimate_drift(freq, tau0)
+            slope = stability.allan_slope(
+                [p.tau_used for p in pts], [p.adev_hz for p in pts]
+            )
+            summary[name] = (slope, stability.classify_noise(slope), drift)
         self.last_results = results
+        self.last_summary = summary
         self._refresh_results_view()
 
         span = self.plot_grid.region()
         where = (f"selection ({span[0]:.4g}–{span[1]:.4g} s)"
                  if (use_selection and span) else "full range")
-        self.statusBar().showMessage(f"Computed stability over {where} for {len(active)} channel(s).")
+        detr = {0: "", 1: ", linear drift removed", 2: ", quadratic drift removed"}[detrend]
+        self.statusBar().showMessage(
+            f"Computed stability over {where} for {len(active)} channel(s){detr}.")
 
     def _refresh_results_view(self):
         self.result_mode = self.result_mode_combo.currentData()
@@ -345,10 +371,14 @@ class MainWindow(QtWidgets.QMainWindow):
         channels = list(results.keys())
         frac = (self.result_mode == "fractional")
 
-        self.result_table.setRowCount(len(tau_set))
+        extra = ["σ(τ) slope μ", "noise type", "drift (Hz/s)"]
+        n_tau = len(tau_set)
+        self.result_table.setRowCount(n_tau + len(extra))
         self.result_table.setColumnCount(len(channels))
         self.result_table.setHorizontalHeaderLabels(channels)
-        self.result_table.setVerticalHeaderLabels([self._fmt_tau(t) for t in tau_set])
+        self.result_table.setVerticalHeaderLabels(
+            [self._fmt_tau(t) for t in tau_set] + extra
+        )
 
         for col, name in enumerate(channels):
             by_tau = {round(p.tau_used, 12): p for p in results[name]}
@@ -363,6 +393,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 item = QtWidgets.QTableWidgetItem(text)
                 item.setToolTip(f"m={p.m}, n={p.n}" if p else "insufficient data")
                 self.result_table.setItem(row, col, item)
+
+            # Summary rows.
+            slope, noise, drift = self.last_summary.get(name, (float("nan"), "—", float("nan")))
+            slope_txt = f"{slope:+.2f}" if np.isfinite(slope) else "—"
+            drift_txt = f"{drift:.2e}" if np.isfinite(drift) else "—"
+            for r, txt in enumerate((slope_txt, noise, drift_txt)):
+                cell = QtWidgets.QTableWidgetItem(txt)
+                cell.setBackground(QtCore.Qt.lightGray)
+                self.result_table.setItem(n_tau + r, col, cell)
         self.result_table.resizeColumnsToContents()
         unit = "fractional σ(τ)" if frac else "σ(τ) [Hz]"
         self.result_table.setToolTip(unit)
@@ -384,9 +423,14 @@ class MainWindow(QtWidgets.QMainWindow):
             good = np.isfinite(y) & (y > 0)
             if not np.any(good):
                 continue
+            label = name
+            if name in self.last_summary:
+                slope, noise, _ = self.last_summary[name]
+                if np.isfinite(slope):
+                    label = f"{name}  τ^{slope:+.2f} ({noise})"
             color = _COLORS[i % len(_COLORS)]
             self.adev_plot.plot(
-                x[good], y[good], name=name,
+                x[good], y[good], name=label,
                 pen=pg.mkPen(color, width=2),
                 symbol="o", symbolBrush=color, symbolSize=6,
             )
@@ -409,9 +453,47 @@ class MainWindow(QtWidgets.QMainWindow):
         with open(path, "w", newline="") as fh:
             wr = csv.writer(fh)
             wr.writerow(["channel", "tau_s", "m", "n",
-                         "adev_hz", "err_hz", "adev_fractional", "err_fractional"])
+                         "adev_hz", "err_hz", "adev_fractional", "err_fractional",
+                         "adev_slope", "noise_type", "drift_hz_per_s"])
             for name, pts in self.last_results.items():
+                slope, noise, drift = self.last_summary.get(
+                    name, (float("nan"), "", float("nan")))
                 for p in pts:
                     wr.writerow([name, p.tau_used, p.m, p.n,
-                                 p.adev_hz, p.err_hz, p.adev_frac, p.err_frac])
+                                 p.adev_hz, p.err_hz, p.adev_frac, p.err_frac,
+                                 slope, noise, drift])
         self.statusBar().showMessage(f"Exported results to {path}")
+
+    def _export_plots_image(self):
+        if self.dataset is None or not self.plot_grid._plots:
+            QtWidgets.QMessageBox.information(self, "No plots", "Load and display channels first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save channel plots", "fxe_channels.png",
+            "Images (*.png *.jpg *.svg)")
+        if not path:
+            return
+        try:
+            self.plot_grid.export_image(path)
+            self.statusBar().showMessage(f"Saved channel plots to {path}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _export_adev_image(self):
+        if not self.last_results:
+            QtWidgets.QMessageBox.information(self, "Nothing to save", "Compute stability first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Allan plot", "fxe_allan.png",
+            "Images (*.png *.jpg *.svg)")
+        if not path:
+            return
+        try:
+            if path.lower().endswith(".svg"):
+                from pyqtgraph.exporters import SVGExporter
+                SVGExporter(self.adev_plot.plotItem).export(path)
+            else:
+                self.adev_plot.grab().save(path)
+            self.statusBar().showMessage(f"Saved Allan plot to {path}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Export failed", str(exc))

@@ -137,10 +137,32 @@ offset, so `σ_fractional = σ_Hz / ν₀`. Choose ν₀ with the controls:
 10 s needs > 20 000 samples at a 1 ms gate), are skipped automatically. Add extra
 τ values in the “extra τ” box (comma-separated).
 
-Results appear as a **table** (τ × channel) and a **log-log σ(τ) plot**, and can
-be **exported to CSV** (`channel, tau_s, m, n, adev_hz, err_hz, adev_fractional,
-err_fractional`). The reported uncertainty is a simple 1σ estimate based on the
-number of independent samples.
+### Drift removal
+
+**Remove drift before σ(τ)** subtracts a fitted trend from each channel before
+the Allan deviation: *Linear* removes a constant frequency drift (Hz/s),
+*Quadratic* removes curvature. This is standard when a slow, deterministic drift
+would otherwise dominate the long-τ points. The fractional reference ν₀ is still
+taken from the original (pre-detrend) mean, so the fractional numbers stay
+meaningful.
+
+### Noise-type classification
+
+The bottom of the results table (and the Allan-plot legend) reports, per channel:
+
+- **σ(τ) slope μ** — the log-log slope of σ(τ) (σ ∝ τ^μ),
+- **noise type** — the nearest power-law noise: τ⁻¹ White/Flicker PM, τ⁻¹ᐟ²
+  White FM, τ⁰ Flicker FM, τ⁺¹ᐟ² Random-walk FM, τ⁺¹ Frequency drift,
+- **drift (Hz/s)** — the measured linear drift rate.
+
+### Exports
+
+- **Export results CSV** — `channel, tau_s, m, n, adev_hz, err_hz,
+  adev_fractional, err_fractional, adev_slope, noise_type, drift_hz_per_s`.
+  The reported uncertainty is a simple 1σ estimate from the number of
+  independent samples.
+- **Save channel plots as image** and **Save Allan plot** — write `.png` /
+  `.jpg` (pixel-perfect) or `.svg` (vector, via pyqtgraph's exporter).
 
 ---
 

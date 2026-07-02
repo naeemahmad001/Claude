@@ -129,6 +129,19 @@ class PlotGrid(QtWidgets.QWidget):
         self._relink_x()
         self.reset_region()
 
+    def export_image(self, path: str) -> None:
+        """Save the current channel-plot grid to an image file.
+
+        ``.svg`` uses pyqtgraph's vector exporter; other extensions
+        (``.png``, ``.jpg`` …) are saved as a pixel-perfect grab of the
+        rendered widget.
+        """
+        if path.lower().endswith(".svg"):
+            from pyqtgraph.exporters import SVGExporter
+            SVGExporter(self.glw.scene()).export(path)
+        else:
+            self.glw.grab().save(path)
+
     def reset_region(self) -> None:
         """Reset the selector to span the whole record."""
         if self._dataset is None or self._dataset.time.size == 0:

@@ -39,6 +39,16 @@ import numpy as np
 # Convenient default averaging times (seconds) requested for FXE beats.
 DEFAULT_TAUS: tuple = (1e-3, 10e-3, 100e-3, 200e-3, 1.0, 10.0)
 
+# Power-law noise types by ADEV log-log slope  (sigma_y(tau) ~ tau^slope).
+# ADEV cannot separate White PM from Flicker PM (both ~tau^-1); MDEV can.
+NOISE_TABLE = [
+    (-1.0, "White/Flicker PM"),
+    (-0.5, "White FM"),
+    (0.0, "Flicker FM"),
+    (0.5, "Random-walk FM"),
+    (1.0, "Frequency drift"),
+]
+
 
 @dataclass
 class StabilityPoint:
@@ -102,11 +112,56 @@ def _m_for_tau(tau: float, tau0: float) -> int:
     return int(round(tau / tau0))
 
 
+def detrend_series(freq, tau0: float, order: int):
+    """Remove a polynomial trend of ``order`` from ``freq`` (1=linear drift).
+
+    The fit is done against a uniform time axis (t = i·tau0) using only the
+    finite samples; NaNs are preserved in the residual. Returns
+    ``(residual, coeffs)`` where ``coeffs`` are the polynomial coefficients
+    in time (highest power first), or ``(freq, None)`` when ``order < 1`` or
+    there are too few points.
+    """
+    freq = np.asarray(freq, dtype=float)
+    if order < 1:
+        return freq, None
+    n = freq.size
+    t = np.arange(n) * tau0
+    finite = np.isfinite(freq)
+    if int(finite.sum()) <= order:
+        return freq, None
+    coeffs = np.polyfit(t[finite], freq[finite], order)
+    return freq - np.polyval(coeffs, t), coeffs
+
+
+def estimate_drift(freq, tau0: float) -> float:
+    """Linear frequency drift rate in Hz per second (NaN if indeterminate)."""
+    _, coeffs = detrend_series(freq, tau0, 1)
+    return float(coeffs[0]) if coeffs is not None else float("nan")
+
+
+def allan_slope(taus, adevs) -> float:
+    """Log-log slope of sigma(tau); NaN if fewer than two valid points."""
+    taus = np.asarray(taus, dtype=float)
+    adevs = np.asarray(adevs, dtype=float)
+    good = np.isfinite(taus) & np.isfinite(adevs) & (taus > 0) & (adevs > 0)
+    if int(good.sum()) < 2:
+        return float("nan")
+    return float(np.polyfit(np.log10(taus[good]), np.log10(adevs[good]), 1)[0])
+
+
+def classify_noise(slope: float) -> str:
+    """Nearest power-law noise type for an ADEV log-log ``slope``."""
+    if not np.isfinite(slope):
+        return "—"
+    return min(NOISE_TABLE, key=lambda kv: abs(kv[0] - slope))[1]
+
+
 def compute_stability(
     freq: Sequence[float],
     tau0: float,
     taus: Iterable[float] = DEFAULT_TAUS,
     f_ref: Optional[float] = None,
+    detrend: int = 0,
 ) -> List[StabilityPoint]:
     """Compute overlapping ADEV at each requested averaging time.
 
@@ -122,6 +177,10 @@ def compute_stability(
         Reference/carrier frequency for the fractional stability.  If
         ``None`` the mean of ``freq`` is used (stability of the beat
         relative to itself).
+    detrend : int
+        Polynomial order of frequency trend to remove before the ADEV
+        (0 = none, 1 = linear drift, 2 = quadratic).  ``f_ref`` for the
+        fractional value is taken from the *original* mean.
 
     Returns
     -------
@@ -130,14 +189,20 @@ def compute_stability(
         too long for the record, or shorter than ``tau0``, are skipped).
     """
     freq = np.asarray(list(freq), dtype=float)
-    freq = freq[np.isfinite(freq)]
-    if freq.size == 0 or tau0 <= 0:
+    finite = freq[np.isfinite(freq)]
+    if finite.size == 0 or tau0 <= 0:
         return []
 
     if f_ref is None:
-        f_ref = float(np.mean(freq))
+        f_ref = float(np.mean(finite))  # from the original data, pre-detrend
     # Guard against a zero reference for the fractional value.
     safe_ref = f_ref if f_ref not in (0.0, None) else float("nan")
+
+    if detrend and detrend >= 1:
+        freq, _ = detrend_series(freq, tau0, detrend)
+    freq = freq[np.isfinite(freq)]
+    if freq.size == 0:
+        return []
 
     results: List[StabilityPoint] = []
     for tau in sorted(set(taus)):
@@ -171,6 +236,7 @@ def stability_table(
     tau0: float,
     taus: Iterable[float] = DEFAULT_TAUS,
     f_refs: Optional[dict] = None,
+    detrend: int = 0,
 ) -> dict:
     """Compute stability for several channels at once.
 
@@ -193,6 +259,6 @@ def stability_table(
     out = {}
     for name, freq in channels.items():
         out[name] = compute_stability(
-            freq, tau0, taus, f_ref=f_refs.get(name)
+            freq, tau0, taus, f_ref=f_refs.get(name), detrend=detrend
         )
     return out

@@ -100,3 +100,58 @@ def test_tau_shorter_than_gate_skipped():
 
 def test_default_taus_present():
     assert stability.DEFAULT_TAUS == (1e-3, 10e-3, 100e-3, 200e-3, 1.0, 10.0)
+
+
+def test_detrend_removes_linear_drift():
+    tau0 = 1e-3
+    n = 10_000
+    t = np.arange(n) * tau0
+    drift = 3.0  # Hz/s
+    rng = np.random.default_rng(1)
+    y = 5.0e6 + drift * t + 0.5 * rng.standard_normal(n)
+    res, coeffs = stability.detrend_series(y, tau0, 1)
+    assert coeffs[0] == pytest.approx(drift, rel=1e-2)     # recovered slope
+    # residual is essentially flat
+    assert stability.estimate_drift(res, tau0) == pytest.approx(0.0, abs=1e-2)
+
+
+def test_estimate_drift():
+    tau0 = 1e-3
+    t = np.arange(5000) * tau0
+    y = 1.0e6 - 2.5 * t
+    assert stability.estimate_drift(y, tau0) == pytest.approx(-2.5, rel=1e-6)
+
+
+def test_detrend_lowers_long_tau_adev():
+    # A strong linear drift inflates the long-tau ADEV; removing it helps.
+    tau0 = 1e-3
+    n = 100_000
+    t = np.arange(n) * tau0
+    rng = np.random.default_rng(2)
+    y = 1.0e6 + 50.0 * t + rng.standard_normal(n)  # big drift
+    with_drift = stability.compute_stability(y, tau0, taus=[1.0], f_ref=1.0)[0]
+    without = stability.compute_stability(y, tau0, taus=[1.0], f_ref=1.0, detrend=1)[0]
+    assert without.adev_hz < with_drift.adev_hz * 0.5
+
+
+def test_detrend_fref_from_original_mean():
+    tau0 = 1e-3
+    t = np.arange(5000) * tau0
+    y = 4.0e6 + 10.0 * t + np.random.default_rng(3).standard_normal(5000)
+    mean0 = float(np.mean(y))
+    pts = stability.compute_stability(y, tau0, taus=[10e-3], f_ref=None, detrend=1)
+    p = pts[0]
+    assert p.adev_frac == pytest.approx(p.adev_hz / mean0, rel=1e-9)
+
+
+def test_allan_slope_and_classification():
+    # White FM -> slope ~ -0.5 -> "White FM".
+    rng = np.random.default_rng(9)
+    y = rng.standard_normal(200_000)
+    pts = stability.compute_stability(y, 1e-3, taus=[1e-3, 10e-3, 100e-3, 1.0], f_ref=1.0)
+    slope = stability.allan_slope([p.tau_used for p in pts], [p.adev_hz for p in pts])
+    assert slope == pytest.approx(-0.5, abs=0.05)
+    assert stability.classify_noise(slope) == "White FM"
+    assert stability.classify_noise(1.0) == "Frequency drift"
+    assert stability.classify_noise(0.0) == "Flicker FM"
+    assert stability.classify_noise(float("nan")) == "—"
