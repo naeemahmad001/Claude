@@ -27,21 +27,36 @@ plots that stay responsive on millions of samples) and NumPy.
 
 ---
 
-## Install
+## Quick start (one command)
+
+These launchers create a local virtual environment, install the
+dependencies on first run, and start the GUI. Run them on a machine with a
+display (your desktop, not a headless server).
 
 ```bash
+# macOS / Linux
+./run.sh
+
+# Windows (double-click run.bat, or:)
+run.bat
+```
+
+## Manual install & run
+
+If you prefer to manage things yourself (Python 3.9+ required):
+
+```bash
+python -m venv .venv
+# Windows:            .venv\Scripts\activate
+# macOS / Linux:      source .venv/bin/activate
 pip install -r requirements.txt
+python run.py            # or: python -m fxe_analyzer
 ```
 
 Dependencies: `numpy`, `PyQt5`, `pyqtgraph` (plus `pytest` for the test suite).
 
-## Run
-
-```bash
-python run.py
-# or
-python -m fxe_analyzer
-```
+> **Linux:** if Qt complains about missing libraries, install them with
+> `sudo apt install libgl1 libxkbcommon0` (Debian/Ubuntu).
 
 ## Try it immediately (synthetic data)
 
