@@ -140,6 +140,78 @@ def test_gap_detection(tmp_path):
     assert 2 in ds.gap_indices  # gap starts after sample index 2
 
 
+# A few real lines of the FXE "YYMMDD HHMMSS.sss flag ch1..ch8 zero" export,
+# including the 99999999.999 over-range sentinel on some channels.
+_FXE_SAMPLE = (
+    "260630 153814.320 1  20079316.17539099980  26478291.56656499950  49999992.97996800390  37366052.71031400560  21646228.27099500220  41282112.55396899580  28217775.18150600050  27520317.63587700200         0.00000000000\n"
+    "260630 153814.430 0  20079316.17507900300  99999999.99899999800  49999992.89527599510  37370623.14537499840  21645653.79367100070  41282111.44092500210  26969838.45996100080  29512635.00732345880         0.00000000000\n"
+    "260630 153814.524 0  20079316.17387099940  99999999.99899999800  49999992.89879199860  37375741.09910999980  21645013.55651900170  41282110.69635400180  99999999.99899999800  99999999.99899999800         0.00000000000\n"
+    "260630 153814.632 0  20079316.17475000020  40423876.14490629730  49999992.92098400000  37376646.98231200130  21644806.68730999900  41282109.76968800280  43327558.86247767510  30469387.60637113820         0.00000000000\n"
+)
+
+
+def test_parse_real_fxe_format(tmp_path):
+    path = _write(tmp_path, "fxe.txt", _FXE_SAMPLE)
+    raw = loader.parse_file(path)
+    assert raw.n_cols == 12
+    assert raw.n_rows == 4
+
+    m = loader.suggest_mapping(raw)
+    assert m.time_mode == "datetime"
+    assert m.date_col == 0 and m.time_col == 1
+    # Flag column (2) and trailing all-zero column (11) are skipped.
+    assert m.channel_cols["Ch1"] == 3
+    assert 2 not in m.channel_cols.values()
+    assert 11 not in m.channel_cols.values()
+    assert len(m.channel_cols) == 8
+
+    ds = loader.build_dataset([raw], m)
+    assert ds.absolute_time
+    # Timestamp of the first row: 2026-06-30 15:38:14.320 UTC.
+    expected = (
+        float((np.datetime64("2026-06-30") - np.datetime64("1970-01-01"))
+              / np.timedelta64(1, "s"))
+        + 15 * 3600 + 38 * 60 + 14.320
+    )
+    assert ds.time[0] == pytest.approx(expected, abs=1e-3)
+    # Over-range sentinels on Ch2 (rows 1 & 2) become NaN; Ch1 is clean.
+    assert np.isnan(ds.channels["Ch2"]).sum() == 2
+    assert not np.any(np.isnan(ds.channels["Ch1"]))
+    assert ds.channels["Ch1"][0] == pytest.approx(20079316.175, abs=1e-2)
+
+
+def test_invalid_value_disabled(tmp_path):
+    path = _write(tmp_path, "fxe2.txt", _FXE_SAMPLE)
+    raw = loader.parse_file(path)
+    m = loader.suggest_mapping(raw)
+    m.invalid_value = None  # keep the raw sentinel values
+    ds = loader.build_dataset([raw], m)
+    assert not np.any(np.isnan(ds.channels["Ch2"]))
+    assert ds.channels["Ch2"][1] == pytest.approx(99999999.999, abs=1e-2)
+
+
+def test_hhmmss_time_only(tmp_path):
+    text = "153814.000 10.0\n153815.000 11.0\n153816.000 12.0\n"
+    path = _write(tmp_path, "t.txt", text)
+    m = loader.ColumnMapping(
+        channel_cols={"Ch1": 1}, time_col=0, time_mode="hhmmss"
+    )
+    ds = loader.build_dataset([path], m)
+    assert ds.absolute_time
+    assert ds.tau0 == pytest.approx(1.0, abs=1e-6)
+    assert ds.time[0] == pytest.approx(15 * 3600 + 38 * 60 + 14.0, abs=1e-6)
+
+
+def test_datetime_requires_date_col(tmp_path):
+    text = "153814.0 10.0\n153815.0 11.0\n"
+    path = _write(tmp_path, "u.txt", text)
+    raw = loader.parse_file(path)
+    with pytest.raises(ValueError):
+        loader.ColumnMapping(
+            channel_cols={"Ch1": 1}, time_col=0, time_mode="datetime"
+        ).validate(raw.n_cols)
+
+
 def test_mapping_validation_errors(tmp_path):
     text = "1 2\n3 4\n"
     path = _write(tmp_path, "k.txt", text)

@@ -110,7 +110,7 @@ class PlotGrid(QtWidgets.QWidget):
             # because it interacts badly with linked x-axes in pyqtgraph.)
             plot.plot(
                 x, y, pen=pg.mkPen(color, width=1), name=name,
-                autoDownsample=True,
+                autoDownsample=True, connect="finite",
             )
             plot.enableAutoRange()
 

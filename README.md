@@ -68,6 +68,9 @@ column order depend on the software version, so nothing is hard-coded. When you
 load the first file, a dialog lets you confirm:
 
 - **Timestamp column** and how to read it:
+  - `datetime` — a **date column (YYMMDD)** + a **time column (HHMMSS.sss)**,
+    as used by the FXE 8-channel export. Converted to absolute time.
+  - `hhmmss` — a single time-of-day column (`HHMMSS.sss`).
   - `index` — a sample counter; multiplied by the **gate time**.
   - `seconds` / `unix` — absolute seconds.
   - `mjd` — Modified Julian Date (days); converted to seconds automatically.
@@ -75,6 +78,22 @@ load the first file, a dialog lets you confirm:
 - **Gate time** (sample interval, e.g. `0.001` s for a 1 ms gate). Used when
   there is no timestamp column or for `index` mode.
 - **Channels** — tick up to 8 columns and name them (defaults `Ch1…Ch8`).
+- **Invalid samples** — over-range / unlocked readings (the counter's
+  `99999999.999` sentinel) are blanked to gaps so they don't corrupt the plots
+  or the Allan deviation. You can change or disable the value.
+
+### Recognised FXE 8-channel layout
+
+The typical export —
+
+```
+YYMMDD  HHMMSS.sss  flag  ch1  ch2 … ch8  0.0
+260630  153814.320   1    20079316.175  …            0.00000000000
+```
+
+— is auto-detected: columns 0–1 become the `datetime` timestamp, the `flag`
+(0/1) and trailing all-zero columns are skipped, and columns 3–10 become the 8
+channels. Just confirm the dialog and click **OK**.
 
 The same mapping is applied to every file you join, so keep joined files in the
 same export format.

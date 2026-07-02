@@ -33,7 +33,16 @@ _MJD_UNIX_EPOCH = 40587.0  # MJD of 1970-01-01, for MJD -> Unix conversion
 SECONDS_PER_DAY = 86400.0
 
 # Recognised timestamp interpretations.
-TIME_MODES = ("index", "seconds", "unix", "mjd")
+#   index    : sample counter (x gate time)
+#   seconds  : absolute seconds
+#   unix     : absolute Unix epoch seconds
+#   mjd      : Modified Julian Date (days)
+#   datetime : a YYMMDD date column + an HHMMSS.sss time column
+#   hhmmss   : an HHMMSS.sss time-of-day column (no date)
+TIME_MODES = ("index", "seconds", "unix", "mjd", "datetime", "hhmmss")
+
+# Value an FXE/K+K counter reports for an over-range / unlocked channel.
+DEFAULT_INVALID_VALUE = 99999999.999
 
 
 def _is_number(token: str) -> bool:
@@ -76,6 +85,9 @@ class ColumnMapping:
     time_col: Optional[int] = None         # column index or None (synth)
     time_mode: str = "index"               # one of TIME_MODES
     gate_time: float = 1e-3                # used for 'index' / synthesised time
+    date_col: Optional[int] = None         # YYMMDD column (for 'datetime' mode)
+    invalid_value: Optional[float] = DEFAULT_INVALID_VALUE  # -> NaN, None disables
+    invalid_tol: float = 1e-2              # match tolerance for invalid_value
 
     def validate(self, n_cols: int) -> None:
         if self.time_mode not in TIME_MODES:
@@ -84,6 +96,11 @@ class ColumnMapping:
             raise ValueError("gate_time must be positive")
         if self.time_col is not None and not (0 <= self.time_col < n_cols):
             raise ValueError(f"time_col {self.time_col} out of range")
+        if self.time_mode in ("datetime", "hhmmss") and self.time_col is None:
+            raise ValueError(f"{self.time_mode} mode needs a time column")
+        if self.time_mode == "datetime":
+            if self.date_col is None or not (0 <= self.date_col < n_cols):
+                raise ValueError("datetime mode needs a valid date column")
         if not self.channel_cols:
             raise ValueError("no channels selected")
         for name, col in self.channel_cols.items():
@@ -177,37 +194,92 @@ def parse_file(path: str, delimiter: Optional[str] = "__auto__") -> RawFile:
     )
 
 
+def _is_integer_col(col: np.ndarray) -> bool:
+    return bool(np.all(np.abs(col - np.round(col)) < 1e-6))
+
+
+def _looks_like_yymmdd(col: np.ndarray) -> bool:
+    """6-digit YYMMDD integers with valid month/day."""
+    if col.size == 0 or not _is_integer_col(col):
+        return False
+    iv = np.round(col).astype(np.int64)
+    if np.median(iv) < 10101 or np.max(iv) > 999999 or np.min(iv) < 0:
+        return False
+    mm = (iv // 100) % 100
+    dd = iv % 100
+    return bool(np.all((mm >= 1) & (mm <= 12) & (dd >= 1) & (dd <= 31)))
+
+
+def _looks_like_hhmmss(col: np.ndarray) -> bool:
+    """HHMMSS.sss time-of-day values (00:00:00 .. 23:59:59.xxx)."""
+    if col.size == 0 or np.min(col) < 0 or np.max(col) >= 240000:
+        return False
+    hh = np.floor(col / 10000.0)
+    rem = col - hh * 10000.0
+    mm = np.floor(rem / 100.0)
+    ss = rem - mm * 100.0
+    return bool(np.all((hh <= 23) & (mm <= 59) & (ss < 60)))
+
+
+def _is_binary_flag(col: np.ndarray) -> bool:
+    if not _is_integer_col(col):
+        return False
+    return set(np.unique(np.round(col).astype(int)).tolist()).issubset({0, 1})
+
+
+def _is_all_zero(col: np.ndarray) -> bool:
+    return bool(np.all(col == 0.0))
+
+
 def suggest_mapping(raw: RawFile, max_channels: int = 8) -> ColumnMapping:
     """Heuristically propose a column mapping for a parsed file.
 
-    Assumes the first column is a timestamp when it is monotonically
-    increasing and clearly different in scale from the others; otherwise
-    treats every column as a channel.
+    Recognises three common shapes, in order of preference:
+
+    1. ``YYMMDD HHMMSS.sss flag  ch1..chN  [zeros]`` (the FXE/K+K export):
+       columns 0 and 1 become a ``datetime`` timestamp and constant
+       flag / all-zero columns are skipped when picking channels.
+    2. A single leading, monotonically-increasing timestamp column
+       (interpreted as MJD / Unix / seconds by its magnitude).
+    3. No timestamp — every column is treated as a channel.
     """
     n_cols = raw.n_cols
-    channel_cols: Dict[str, int] = {}
-    time_col: Optional[int] = None
-    time_mode = "index"
-
     if n_cols == 0:
         return ColumnMapping(channel_cols={"Ch1": 0})
 
-    first = raw.data[:, 0]
-    monotonic = np.all(np.diff(first) > 0) if first.size > 1 else False
-    if monotonic and n_cols >= 2:
+    col0 = raw.data[:, 0]
+    channel_cols: Dict[str, int] = {}
+    date_col: Optional[int] = None
+    time_col: Optional[int] = None
+    time_mode = "index"
+
+    # 1) date + time-of-day pair (unambiguous: needs a YYMMDD integer column).
+    if n_cols >= 4 and _looks_like_yymmdd(col0) and _looks_like_hhmmss(raw.data[:, 1]):
+        date_col, time_col, time_mode = 0, 1, "datetime"
+        candidates = list(range(2, n_cols))
+    # 2) monotonic numeric timestamp (MJD / Unix / seconds by magnitude).
+    #    (A standalone HHMMSS column is not auto-detected because its value
+    #    range overlaps MJD/seconds; pick 'hhmmss' manually if needed.)
+    elif col0.size > 1 and np.all(np.diff(col0) > 0) and n_cols >= 2:
         time_col = 0
-        med = float(np.median(first))
-        if 40000 < med < 80000:      # plausible MJD (covers ~1968–2077)
+        med = float(np.median(col0))
+        if 40000 < med < 80000:
             time_mode = "mjd"
-        elif med > 1e8:              # large -> Unix epoch seconds
+        elif med > 1e8:
             time_mode = "unix"
         else:
             time_mode = "seconds"
-        data_cols = list(range(1, n_cols))
+        candidates = list(range(1, n_cols))
     else:
-        data_cols = list(range(n_cols))
+        candidates = list(range(n_cols))
 
-    for i, col in enumerate(data_cols[:max_channels], start=1):
+    # Skip flag (0/1) and all-zero columns when choosing channels.
+    channel_candidates = [
+        c for c in candidates
+        if not _is_binary_flag(raw.data[:, c]) and not _is_all_zero(raw.data[:, c])
+    ] or candidates  # fall back to raw candidates if the filter emptied it
+
+    for i, col in enumerate(channel_candidates[:max_channels], start=1):
         channel_cols[f"Ch{i}"] = col
 
     return ColumnMapping(
@@ -215,7 +287,35 @@ def suggest_mapping(raw: RawFile, max_channels: int = 8) -> ColumnMapping:
         time_col=time_col,
         time_mode=time_mode,
         gate_time=1e-3,
+        date_col=date_col,
     )
+
+
+def _seconds_of_day(time_col: np.ndarray) -> np.ndarray:
+    """Convert an HHMMSS.sss column into seconds since midnight."""
+    t = time_col.astype(float)
+    hh = np.floor(t / 10000.0)
+    rem = t - hh * 10000.0
+    mm = np.floor(rem / 100.0)
+    ss = rem - mm * 100.0
+    return hh * 3600.0 + mm * 60.0 + ss
+
+
+def _datetime_to_epoch(date_col: np.ndarray, time_col: np.ndarray) -> np.ndarray:
+    """Combine a YYMMDD date column and HHMMSS.sss time column into epoch s."""
+    sod = _seconds_of_day(time_col)
+    date_int = np.round(date_col).astype(np.int64)
+    base = {}
+    for dv in np.unique(date_int):
+        y = 2000 + dv // 10000
+        m = (dv // 100) % 100
+        d = dv % 100
+        dt = np.datetime64(f"{int(y):04d}-{int(m):02d}-{int(d):02d}")
+        base[int(dv)] = float(
+            (dt - np.datetime64("1970-01-01")) / np.timedelta64(1, "s")
+        )
+    day_start = np.array([base[int(dv)] for dv in date_int], dtype=float)
+    return day_start + sod
 
 
 def _time_axis(raw: RawFile, mapping: ColumnMapping) -> tuple[np.ndarray, bool]:
@@ -228,13 +328,15 @@ def _time_axis(raw: RawFile, mapping: ColumnMapping) -> tuple[np.ndarray, bool]:
         return np.arange(n) * mapping.gate_time, False
 
     col = raw.data[:, mapping.time_col]
-    if mapping.time_mode == "seconds":
-        return col.astype(float), True
-    if mapping.time_mode == "unix":
+    if mapping.time_mode in ("seconds", "unix"):
         return col.astype(float), True
     if mapping.time_mode == "mjd":
         # Convert MJD (days) to Unix epoch seconds.
         return (col - _MJD_UNIX_EPOCH) * SECONDS_PER_DAY, True
+    if mapping.time_mode == "hhmmss":
+        return _seconds_of_day(col), True
+    if mapping.time_mode == "datetime":
+        return _datetime_to_epoch(raw.data[:, mapping.date_col], col), True
     raise ValueError(f"unknown time_mode {mapping.time_mode!r}")
 
 
@@ -278,7 +380,14 @@ def build_dataset(
             running_offset = float(t[-1]) if t.size else running_offset
         times.append(t)
         for name, col in mapping.channel_cols.items():
-            chan_data[name].append(raw.data[:, col].astype(float))
+            vals = raw.data[:, col].astype(float)
+            if mapping.invalid_value is not None:
+                # Blank out over-range / unlocked samples (e.g. 99999999.999).
+                bad = np.abs(vals - mapping.invalid_value) <= mapping.invalid_tol
+                if np.any(bad):
+                    vals = vals.copy()
+                    vals[bad] = np.nan
+            chan_data[name].append(vals)
 
     if not times:
         raise ValueError("no data rows found in the provided files")
