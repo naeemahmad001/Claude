@@ -123,19 +123,13 @@ def print_table(cav, wavelengths_nm):
         )
 
 
-def make_plots(cav, wavelengths_nm, fname="cavity_simulation.png"):
-    lam_scan = np.linspace(300, 1700, 500) * 1e-9  # continuous scan [m]
-    colors = plt.cm.viridis(np.linspace(0.0, 0.85, len(wavelengths_nm)))
+def _colors(wavelengths_nm):
+    return plt.cm.viridis(np.linspace(0.0, 0.85, len(wavelengths_nm)))
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    fig.suptitle(
-        f"Planar-concave cavity  (R = {cav.R:.0f} m, L = {cav.L * 100:.0f} cm, "
-        f"$z_R$ = {cav.z_R * 100:.1f} cm)",
-        fontsize=13,
-    )
 
-    # (1) beam envelope inside the cavity for the selected wavelengths
-    ax = axes[0, 0]
+def plot_envelope(ax, cav, wavelengths_nm):
+    """(1) Beam envelope inside the cavity for the selected wavelengths."""
+    colors = _colors(wavelengths_nm)
     z = np.linspace(0, cav.L, 400)
     for lam_nm, c in zip(wavelengths_nm, colors):
         w = cav.spot(lam_nm * 1e-9, z) * 1e6
@@ -149,8 +143,11 @@ def make_plots(cav, wavelengths_nm, fname="cavity_simulation.png"):
     ax.legend(fontsize=8, title="wavelength")
     ax.grid(alpha=0.3)
 
-    # (2) waist and mirror spot vs wavelength
-    ax = axes[0, 1]
+
+def plot_spots(ax, cav, wavelengths_nm):
+    """(2) Waist and mirror spot vs wavelength."""
+    colors = _colors(wavelengths_nm)
+    lam_scan = np.linspace(300, 1700, 500) * 1e-9
     ax.plot(lam_scan * 1e9, cav.waist(lam_scan) * 1e6, label=r"$w_0$ (planar mirror)")
     ax.plot(lam_scan * 1e9, cav.spot_on_curved_mirror(lam_scan) * 1e6, label=r"$w$ (curved mirror)")
     for lam_nm, c in zip(wavelengths_nm, colors):
@@ -161,8 +158,11 @@ def make_plots(cav, wavelengths_nm, fname="cavity_simulation.png"):
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
 
-    # (3) divergence vs wavelength
-    ax = axes[1, 0]
+
+def plot_divergence(ax, cav, wavelengths_nm):
+    """(3) Divergence vs wavelength."""
+    colors = _colors(wavelengths_nm)
+    lam_scan = np.linspace(300, 1700, 500) * 1e-9
     ax.plot(lam_scan * 1e9, cav.divergence(lam_scan) * 1e3, color="tab:red")
     for lam_nm, c in zip(wavelengths_nm, colors):
         ax.plot(lam_nm, cav.divergence(lam_nm * 1e-9) * 1e3, "o", color=c)
@@ -171,8 +171,9 @@ def make_plots(cav, wavelengths_nm, fname="cavity_simulation.png"):
     ax.set_title(r"Divergence $\theta = \lambda/\pi w_0 \propto \sqrt{\lambda}$")
     ax.grid(alpha=0.3)
 
-    # (4) mode spectrum over one FSR
-    ax = axes[1, 1]
+
+def plot_spectrum(ax, cav, wavelengths_nm):
+    """(4) Mode spectrum over one FSR (wavelength-independent)."""
     fsr = cav.fsr
     dt = cav.transverse_mode_spacing
     for order, (h, c) in enumerate(zip([1.0, 0.6, 0.35], ["k", "tab:blue", "tab:orange"])):
@@ -191,14 +192,83 @@ def make_plots(cav, wavelengths_nm, fname="cavity_simulation.png"):
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
+
+# name -> plotting function; each draws one panel onto a given axis
+PANELS = {
+    "envelope": plot_envelope,
+    "spots": plot_spots,
+    "divergence": plot_divergence,
+    "spectrum": plot_spectrum,
+}
+
+
+def _suptitle(cav):
+    return (
+        f"Planar-concave cavity  (R = {cav.R:.0f} m, L = {cav.L * 100:.0f} cm, "
+        f"$z_R$ = {cav.z_R * 100:.1f} cm)"
+    )
+
+
+def make_combined_figure(cav, wavelengths_nm, fname="cavity_simulation.png"):
+    """All four panels in one 2x2 figure."""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    fig.suptitle(_suptitle(cav), fontsize=13)
+    for ax, plot_fn in zip(axes.flat, PANELS.values()):
+        plot_fn(ax, cav, wavelengths_nm)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(fname, dpi=150)
-    print(f"\nPlots saved to {fname}")
+    plt.close(fig)
+    print(f"Saved {fname}")
+
+
+def make_single_figure(name, cav, wavelengths_nm, fname=None):
+    """One panel as its own figure, saved to <name>.png by default."""
+    fname = fname or f"cavity_{name}.png"
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    fig.suptitle(_suptitle(cav), fontsize=11)
+    PANELS[name](ax, cav, wavelengths_nm)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.savefig(fname, dpi=150)
+    plt.close(fig)
+    print(f"Saved {fname}")
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Planar-concave cavity Gaussian mode simulation.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("-R", "--radius", type=float, default=1.0,
+                        help="radius of curvature of the concave mirror [m]")
+    parser.add_argument("-L", "--length", type=float, default=0.05,
+                        help="cavity length [m]")
+    parser.add_argument("-w", "--wavelengths", type=float, nargs="+",
+                        default=[405, 532, 633, 780, 1064, 1550],
+                        help="wavelengths to highlight [nm]")
+    parser.add_argument("-p", "--plots", nargs="+",
+                        choices=[*PANELS, "all"], default=["all"],
+                        help="which plots to generate")
+    parser.add_argument("--separate", action="store_true",
+                        help="save each selected plot as its own PNG "
+                             "(automatic when specific plots are chosen)")
+    parser.add_argument("--no-table", action="store_true",
+                        help="skip the printed results table")
+    args = parser.parse_args()
+
+    cav = PlanarConcaveCavity(R=args.radius, L=args.length)
+    if not args.no_table:
+        print_table(cav, args.wavelengths)
+        print()
+
+    selected = list(PANELS) if "all" in args.plots else args.plots
+    if "all" in args.plots and not args.separate:
+        make_combined_figure(cav, args.wavelengths)
+    else:
+        for name in selected:
+            make_single_figure(name, cav, args.wavelengths)
 
 
 if __name__ == "__main__":
-    cavity = PlanarConcaveCavity(R=1.0, L=0.05)
-    # common laser lines: 405, 532, 633 (HeNe), 780 (Rb), 1064 (Nd:YAG), 1550 (telecom)
-    wavelengths = [405, 532, 633, 780, 1064, 1550]
-    print_table(cavity, wavelengths)
-    make_plots(cavity, wavelengths)
+    main()

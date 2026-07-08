@@ -70,9 +70,23 @@ Prints the table above and writes `cavity_simulation.png` with four panels:
 mode envelope inside the cavity, spot sizes vs. wavelength, divergence vs.
 wavelength, and the transverse-mode spectrum within one FSR.
 
-To change geometry or wavelengths, edit the bottom of `cavity_simulation.py`:
+### Choosing / printing plots individually
 
-```python
-cavity = PlanarConcaveCavity(R=1.0, L=0.05)   # metres
-wavelengths = [405, 532, 633, 780, 1064, 1550]  # nm
+The four panels are named `envelope`, `spots`, `divergence`, `spectrum`.
+
+```bash
+# all four panels in one figure (default) -> cavity_simulation.png
+python3 cavity_simulation.py
+
+# every panel as its own PNG -> cavity_envelope.png, cavity_spots.png, ...
+python3 cavity_simulation.py --separate
+
+# only the plots you pick, each as its own PNG
+python3 cavity_simulation.py --plots envelope spots
+
+# different geometry and wavelengths from the command line
+python3 cavity_simulation.py -R 1.0 -L 0.05 -w 633 1064 --plots envelope
+
+# see all options
+python3 cavity_simulation.py --help
 ```
